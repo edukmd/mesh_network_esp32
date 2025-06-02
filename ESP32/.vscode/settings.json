@@ -1,0 +1,21 @@
+{
+  "C_Cpp.intelliSenseEngine": "default",
+  "idf.espIdfPathWin": "C:\\Users\\Eduardo Kamada\\esp\\v5.3.2\\esp-idf",
+  "idf.toolsPathWin": "C:\\.espressif",
+  "idf.pythonInstallPath": "C:\\.espressif\\tools\\idf-python\\3.11.2\\python.exe",
+  "files.encoding": "utf8",
+  "files.associations": {
+    "mqtt_client.h": "c",
+    "esp_mesh.h": "c",
+    "string.h": "c",
+    "cjson.h": "c",
+    "inttypes.h": "c",
+    "esp_netif.h": "c",
+    "esp_mesh_internal.h": "c",
+    "wifi.h": "c",
+    "mqtt_mesh.h": "c",
+    "nvs_flash.h": "c"
+  },
+  "idf.portWin": "COM9",
+  "idf.flashType": "UART"
+}
