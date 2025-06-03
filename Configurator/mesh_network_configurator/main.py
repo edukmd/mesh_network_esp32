@@ -5,15 +5,50 @@ import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.colors as colors
 import paho.mqtt.client as mqtt
-
-# Configurações MQTT
-MQTT_BROKER = '192.168.50.208'
-MQTT_PORT = 1883
-MQTT_TOPIC = 'mesh/network/info'
+import subprocess
+import os
+import time
+import socket
 
 # Grafo global
 G = nx.DiGraph()
 lock = threading.Lock()
+global mqtt_client
+
+
+# Configurações MQTT
+def get_local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+        return local_ip
+    except Exception as e:
+        print(f"❌ Erro ao obter IP local: {e}")
+        return "127.0.0.1"
+
+MQTT_BROKER = get_local_ip()
+MQTT_PORT = 1884
+MQTT_TOPIC = "mesh/network/info"
+MQTT_CONFIG_COMMAND_TOPIC = "mesh/cmd"
+def start_mosquitto():
+    mosquitto_path = r"C:\Program Files\mosquitto\mosquitto.exe"
+    config_path = r"C:\Program Files\mosquitto\mosquitto.conf"
+
+    if not os.path.exists(mosquitto_path):
+        print("❌ Mosquitto não encontrado.")
+        return None
+
+    print("🚀 Iniciando Mosquitto...")
+    process = subprocess.Popen(
+        [mosquitto_path, "-c", config_path, "-v"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT
+    )
+    # Aguardar um tempo para garantir que o broker inicie
+    time.sleep(1)
+    return process
 
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
@@ -26,8 +61,10 @@ def on_connect(client, userdata, flags, rc):
 def on_message(client, userdata, msg):
     try:
         payload = msg.payload.decode()
+        send_message(payload)
+        print(f"📥 Mensagem recebida: {payload}")
         data = json.loads(payload)
-        print(f"📥 Mensagem recebida: {data}")
+
 
         if all(k in data for k in ('mac', 'parent', 'hops')):
             mac = data['mac']
@@ -47,6 +84,9 @@ def get_text_color(rgb):
     r, g, b = [x * 255 for x in rgb[:3]]  # valores de 0–255
     luminance = 0.2126*r + 0.7152*g + 0.0722*b
     return 'white' if luminance < 128 else 'black'
+
+def send_message(msg):
+        mqtt_client.publish(MQTT_CONFIG_COMMAND_TOPIC, msg)
 
 
 def plot_graph():
@@ -91,6 +131,9 @@ def plot_graph():
         plt.pause(1)
 
 def main():
+    global mqtt_client
+    mosquitto_process = start_mosquitto()
+
     mqtt_client = mqtt.Client(protocol=mqtt.MQTTv311)
     mqtt_client.on_connect = on_connect
     mqtt_client.on_message = on_message
@@ -100,9 +143,24 @@ def main():
         mqtt_client.loop_start()
     except Exception as e:
         print(f"❌ Erro ao conectar no broker MQTT: {e}")
+        if mosquitto_process:
+            mosquitto_process.terminate()
         return
 
-    plot_graph()
+    try:
+        plot_graph()
+    finally:
+        if mosquitto_process:
+            mosquitto_process.terminate()
+
+
+
+
+
+# Exemplo de uso
+print(f"🌐 IP local detectado: {get_local_ip()}")
+
 
 if __name__ == "__main__":
+    get_local_ip()
     main()
