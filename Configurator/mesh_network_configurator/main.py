@@ -36,8 +36,9 @@ def on_message(client, userdata, msg):
 
             with lock:
                 G.add_node(mac, hops=hops)
-                if parent != "null":
+                if parent != "null" and not G.has_edge(mac, parent):
                     G.add_edge(mac, parent)
+
         else:
             print("⚠️ JSON incompleto:", data)
     except Exception as e:
@@ -45,12 +46,13 @@ def on_message(client, userdata, msg):
 
 def plot_graph():
     plt.ion()
-    fig, ax = plt.subplots(figsize=(10, 10))
+    fig, ax = plt.subplots(figsize=(10, 6))
 
     while True:
         with lock:
             ax.clear()
-            pos = nx.spring_layout(G)
+            pos = nx.spring_layout(G, seed=42, k=1.5)
+
             labels = {
                 node: f"{node}\nHops:{attr['hops']}" if 'hops' in attr else node
                 for node, attr in G.nodes(data=True)
