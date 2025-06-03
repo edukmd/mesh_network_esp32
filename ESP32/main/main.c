@@ -57,7 +57,7 @@ static esp_err_t mqtt_event_handler_cb(esp_mqtt_event_handle_t event) {
     switch (event->event_id) {
         case MQTT_EVENT_CONNECTED:
             ESP_LOGI("MQTT HANDLER", "MQTT connected");
-            esp_mqtt_client_subscribe(client, "/mesh/data", 0);
+            esp_mqtt_client_subscribe(client, "mesh/cmd", 0);
             break;
         case MQTT_EVENT_DISCONNECTED:
             ESP_LOGW("MQTT HANDLER", "MQTT disconnected");
@@ -76,7 +76,7 @@ static esp_err_t mqtt_event_handler_cb(esp_mqtt_event_handle_t event) {
 
 static void mqtt_app_start(void) {
     esp_mqtt_client_config_t mqtt_cfg = {
-        .broker.address.uri = CONFIG_BROKER_URL,  // Ex: "mqtt://192.168.1.100"
+        .broker.address.uri = "mqtt://192.168.50.208",  // Ex: CONFIG_BROKER_URL
         .network.reconnect_timeout_ms = 5000
     };
     mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
@@ -348,6 +348,7 @@ void ip_event_handler(void *arg, esp_event_base_t event_base,
     ESP_LOGI(MESH_TAG, "<IP_EVENT_STA_GOT_IP>IP:" IPSTR, IP2STR(&event->ip_info.ip));
 
     if (esp_mesh_is_root()) {
+        ESP_LOGI(MESH_TAG,"entrou aqui no ROOT");
         mqtt_app_start();  // <-- Alternativa segura
     }
 }

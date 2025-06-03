@@ -1,76 +1,87 @@
-import serial
 import json
-import time
 import threading
 import networkx as nx
 import matplotlib.pyplot as plt
-import re
+import paho.mqtt.client as mqtt
 
-# Porta serial e baudrate
-SERIAL_PORT = 'COM7'
-BAUD_RATE = 115200
+# Configurações MQTT
+MQTT_BROKER = '192.168.50.208'
+MQTT_PORT = 1883
+MQTT_TOPIC = 'mesh/network/info'
 
 # Grafo global
 G = nx.DiGraph()
 lock = threading.Lock()
 
-def read_serial():
-    with serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1) as ser:
-        while True:
-            try:
-                line = ser.readline().decode(errors='ignore').strip()
-                if 'NODE_JSON:' in line:
-                    matches = re.findall(r'\{.*?\}', line)
-                    for chunk in matches:
-                        try:
-                            data = json.loads(chunk)
-                            print(f"Recebido: {data}")
+def on_connect(client, userdata, flags, rc):
+    if rc == 0:
+        print("✅ Conectado ao broker MQTT")
+        client.subscribe(MQTT_TOPIC)
+        print(f"📡 Inscrito no tópico: {MQTT_TOPIC}")
+    else:
+        print(f"❌ Falha na conexão. Código de retorno: {rc}")
 
-                            if all(k in data for k in ('mac', 'parent', 'hops')):
-                                mac = data['mac']
-                                parent = data['parent']
-                                hops = data['hops']
+def on_message(client, userdata, msg):
+    try:
 
-                                with lock:
-                                    G.add_node(mac, hops=hops)
-                                    if parent != "null":
-                                        G.add_edge(parent, mac)
-                            else:
-                                print("⚠️ JSON com campos ausentes:", data)
-                        except json.JSONDecodeError:
-                            print("⚠️ Erro ao decodificar JSON:", chunk)
+        payload = msg.payload.decode()
+        print(payload)
+        data = json.loads(payload)
+        print(f"📥 Mensagem recebida: {data}")
 
-            except Exception as e:
-                print(f"Erro na leitura da serial: {e}")
-            time.sleep(0.1)
+        if all(k in data for k in ('mac', 'parent', 'hops')):
+            mac = data['mac']
+            parent = data['parent']
+            hops = data['hops']
+
+            with lock:
+                G.add_node(mac, hops=hops)
+                if parent != "null":
+                    G.add_edge(mac, parent)
+        else:
+            print("⚠️ JSON incompleto:", data)
+    except Exception as e:
+        print(f"❌ Erro ao processar mensagem: {e}")
 
 def plot_graph():
     plt.ion()
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(10, 10))
 
     while True:
         with lock:
             ax.clear()
             pos = nx.spring_layout(G)
             labels = {
-                node: f"{node}\nHops:{data['hops']}" if 'hops' in data else node
-                for node, data in G.nodes(data=True)
+                node: f"{node}\nHops:{attr['hops']}" if 'hops' in attr else node
+                for node, attr in G.nodes(data=True)
             }
+
             nx.draw(
                 G, pos,
                 with_labels=True,
                 labels=labels,
                 node_color='skyblue',
-                node_size=1800,
-                font_size=8,
+                node_size=3500,
+                font_size=6,
                 ax=ax,
                 arrows=True
             )
         plt.pause(1)
 
 def main():
-    serial_thread = threading.Thread(target=read_serial, daemon=True)
-    serial_thread.start()
+    mqtt_client = mqtt.Client(protocol=mqtt.MQTTv311)
+
+    mqtt_client.on_connect = on_connect
+    mqtt_client.on_message = on_message
+
+    try:
+        mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
+        print(f"foi")
+        mqtt_client.loop_start()
+    except Exception as e:
+        print(f"❌ Erro ao conectar no broker MQTT: {e}")
+        return
+
     plot_graph()
 
 if __name__ == "__main__":

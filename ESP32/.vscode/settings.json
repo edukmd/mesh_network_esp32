@@ -1,6 +1,6 @@
 {
   "C_Cpp.intelliSenseEngine": "default",
-  "idf.espIdfPathWin": "C:\\Users\\Eduardo Kamada\\esp\\v5.3.2\\esp-idf",
+  "idf.espIdfPathWin": "C:\\Users\\eduar\\esp\\v5.4.1\\esp-idf",
   "idf.toolsPathWin": "C:\\.espressif",
   "idf.pythonInstallPath": "C:\\.espressif\\tools\\idf-python\\3.11.2\\python.exe",
   "files.encoding": "utf8",
@@ -16,6 +16,6 @@
     "mqtt_mesh.h": "c",
     "nvs_flash.h": "c"
   },
-  "idf.portWin": "COM9",
+  "idf.portWin": "COM5",
   "idf.flashType": "UART"
 }
