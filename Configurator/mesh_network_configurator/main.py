@@ -29,7 +29,7 @@ def get_local_ip():
         return "127.0.0.1"
 
 MQTT_BROKER = get_local_ip()
-MQTT_PORT = 1884
+MQTT_PORT = 1883
 MQTT_TOPIC = "mesh/network/info"
 MQTT_CONFIG_COMMAND_TOPIC = "mesh/cmd"
 def start_mosquitto():
@@ -61,7 +61,6 @@ def on_connect(client, userdata, flags, rc):
 def on_message(client, userdata, msg):
     try:
         payload = msg.payload.decode()
-        send_message(payload)
         print(f"📥 Mensagem recebida: {payload}")
         data = json.loads(payload)
 

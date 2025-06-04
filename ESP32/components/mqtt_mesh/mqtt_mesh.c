@@ -11,8 +11,11 @@
 #include "esp_timer.h"
 #include "cJSON.h"
 #include <string.h>
+#include "driver/gpio.h"
 
 #define TAG "MQTT_MESH"
+#define MAX_CHILDREN 10
+
 
 static esp_timer_handle_t periodic_timer;
 
@@ -25,37 +28,55 @@ static void mac_to_str(const uint8_t *mac, char *str)
             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
-/**
- * @brief Timer callback to send node info to parent
- */
 static void periodic_send_callback(void *arg)
 {
-    char mac_str[18], parent_str[18];
+    char mac_str[18], parent_str[18], child_mac[18];
     uint8_t mac[6];
     mesh_addr_t parent;
+    mesh_addr_t children[MAX_CHILDREN];
+    int table_size = 0;
 
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
     mac_to_str(mac, mac_str);
 
-    int layer = esp_mesh_get_layer();
     esp_mesh_get_parent_bssid(&parent);
     mac_to_str(parent.addr, parent_str);
+
+    esp_mesh_get_routing_table((mesh_addr_t *)&children, sizeof(children), &table_size);
+    int child_count = table_size / sizeof(mesh_addr_t);
+
+    int layer = esp_mesh_get_layer();
+    ESP_LOGI(TAG, "Layer atual: %d", layer);
+
+    mesh_update_led_layer(layer);
 
     cJSON *json = cJSON_CreateObject();
     cJSON_AddStringToObject(json, "mac", mac_str);
     cJSON_AddStringToObject(json, "parent", esp_mesh_is_root() ? "null" : parent_str);
     cJSON_AddNumberToObject(json, "hops", layer);
 
-    if (esp_mesh_is_root()) {
-        ESP_LOGI(TAG, "Root (self) info: %s", cJSON_PrintUnformatted(json));
-        cJSON_Delete(json);
-        return;
+    // Adiciona filhos
+    cJSON *children_array = cJSON_CreateArray();
+    for (int i = 0; i < child_count; i++) {
+        mac_to_str(children[i].addr, child_mac);
+        cJSON_AddItemToArray(children_array, cJSON_CreateString(child_mac));
     }
+    cJSON_AddItemToObject(json, "children", children_array);
 
     const char *json_str = cJSON_PrintUnformatted(json);
     size_t len = strlen(json_str);
     uint8_t *buffer = calloc(1, len + 1);
     memcpy(buffer, json_str, len);
+
+    ESP_LOGI(TAG, "JSON enviado: %s", json_str);
+
+    if (esp_mesh_is_root()) {
+        ESP_LOGI(TAG, "Root (self) info: %s", json_str);
+        cJSON_free((void *)json_str);
+        cJSON_Delete(json);
+        free(buffer);
+        return;
+    }
 
     mesh_data_t data = {
         .data = buffer,
@@ -69,9 +90,13 @@ static void periodic_send_callback(void *arg)
         ESP_LOGE(TAG, "Failed to send data to parent: %s", esp_err_to_name(err));
     }
 
-    free(buffer);
+    
+
+    cJSON_free((void *)json_str);
     cJSON_Delete(json);
+    free(buffer);
 }
+
 
 void mesh_connected_indicator(int layer) {
     ESP_LOGI("MESH", "CONNECTED to mesh at layer %d", layer);
@@ -79,6 +104,33 @@ void mesh_connected_indicator(int layer) {
 
 void mesh_disconnected_indicator(void) {
     ESP_LOGI("MESH", "DISCONNECTED from mesh");
+}
+
+void mesh_update_led_layer(int layer)
+{
+    switch (layer)
+    {
+    case 1:
+        gpio_set_level(LED_GREEN, 0);
+        gpio_set_level(LED_BLUE, 0);
+        gpio_set_level(LED_RED, 0);
+        break;
+    case 2:
+        gpio_set_level(LED_GREEN, 1);
+        gpio_set_level(LED_BLUE, 0);
+        gpio_set_level(LED_RED, 0);
+        break;
+    case 3:
+        gpio_set_level(LED_GREEN, 1);
+        gpio_set_level(LED_BLUE, 1);
+        gpio_set_level(LED_RED, 0);
+        break;
+    case 4:
+        gpio_set_level(LED_GREEN, 1);
+        gpio_set_level(LED_BLUE, 1);
+        gpio_set_level(LED_RED, 1);
+        break;
+    }
 }
 
 

@@ -13,8 +13,14 @@
 #include "esp_err.h"
 #include "esp_mesh.h"
 
+#define LED_RED    23
+#define LED_BLUE    22
+#define LED_GREEN    21
+
 void mesh_connected_indicator(int layer);
 void mesh_disconnected_indicator(void);
+
+void mesh_update_led_layer(int layer);
 
 /**
  * @brief Initializes and starts the periodic task that sends node info (MAC, hops) to its parent.

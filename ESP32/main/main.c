@@ -19,6 +19,8 @@
 #include "mqtt_client.h"
 #include "mqtt_mesh.h"
 #include "nvs_flash.h"
+#include "driver/gpio.h"
+#include "hal/gpio_types.h"
 
 /*******************************************************
  *                Macros
@@ -30,6 +32,12 @@
 #define RX_SIZE (1500)
 #define TX_SIZE (1460)
 #define REPORT_INTERVAL_MS (10000)
+
+#define GPIO_OUTPUT_PIN_SEL  ((1ULL<<LED_RED) | (1ULL<<LED_BLUE) | (1ULL << LED_GREEN))
+
+#define MAX_ROUTING_TABLE_SIZE 20
+
+static const char *TAG = "MAIN_CONFIG";
 
 /*******************************************************
  *                Variable Definitions
@@ -96,6 +104,8 @@ void report_node_info_task(void *arg) {
     data.size = 0;
     data.data = tx_buf;
     mesh_addr_t parent;
+    mesh_addr_t children[MAX_ROUTING_TABLE_SIZE];
+    int table_size = 0;
 
     while (true) {
         vTaskDelay(REPORT_INTERVAL_MS / portTICK_PERIOD_MS);
@@ -104,14 +114,32 @@ void report_node_info_task(void *arg) {
         esp_read_mac(mac, ESP_MAC_WIFI_STA);
         esp_mesh_get_parent_bssid(&parent);
 
-        char mac_str[18], parent_str[18];
+        char mac_str[18], parent_str[18], child_mac[18];
         get_mac_str(mac_str, mac);
         get_mac_str(parent_str, parent.addr);
+
+        int layer = esp_mesh_get_layer();
+        mesh_update_led_layer(layer);
+
+        esp_mesh_get_routing_table((mesh_addr_t *)children, sizeof(children), &table_size);
+        int child_count = table_size / sizeof(mesh_addr_t);
+
+        ESP_LOGI(TAG, "Routing table size: %d bytes, child count: %d", table_size, child_count);
+        ESP_LOGI(TAG, "[%s] layer %d, filhos diretos: %d", mac_str, layer, child_count);
+
+
 
         cJSON *json = cJSON_CreateObject();
         cJSON_AddStringToObject(json, "mac", mac_str);
         cJSON_AddStringToObject(json, "parent", esp_mesh_is_root() ? "null" : parent_str);
-        cJSON_AddNumberToObject(json, "hops", mesh_layer);
+        cJSON_AddNumberToObject(json, "hops", layer);
+
+        cJSON *children_array = cJSON_CreateArray();
+        for (int i = 0; i < child_count; i++) {
+            get_mac_str(child_mac, children[i].addr);
+            cJSON_AddItemToArray(children_array, cJSON_CreateString(child_mac));
+        }
+        cJSON_AddItemToObject(json, "children", children_array);
 
         const char *json_str = cJSON_PrintUnformatted(json);
         size_t len = strlen(json_str);
@@ -120,13 +148,15 @@ void report_node_info_task(void *arg) {
         tx_buf[len] = '\0';
         data.size = len + 1;
 
-        cJSON_Delete(json);
-
         if (!esp_mesh_is_root()) {
             esp_mesh_send(NULL, &data, 0, NULL, 0);
         }
+
+        cJSON_free((void *)json_str);
+        cJSON_Delete(json);
     }
 }
+
 
 /*******************************************************
  *                Function Declarations
@@ -147,12 +177,24 @@ void esp_mesh_p2p_rx_main(void *arg) {
         data.size = RX_SIZE;
         if (esp_mesh_recv(&from, &data, portMAX_DELAY, &flag, NULL, 0) == ESP_OK && data.size > 0) {
             if (esp_mesh_is_root() && mqtt_client) {
-                ESP_LOGI("NODE_JSON", "%s", (char *)data.data);
-                esp_mqtt_client_publish(mqtt_client, "mesh/network/info", (char *)data.data, 0, 1, 0);
+                char *payload = (char *)data.data;
+
+                // Verifica se é JSON válido
+                cJSON *json = cJSON_Parse(payload);
+                if (!json) {
+                    ESP_LOGW("NODE_JSON", "⚠️ JSON inválido recebido: %s", payload);
+                    continue;
+                }
+
+                ESP_LOGI("NODE_JSON", "📦 %s", payload);
+                esp_mqtt_client_publish(mqtt_client, "mesh/network/info", payload, 0, 1, 0);
+
+                cJSON_Delete(json);
             }
         }
     }
 }
+
 
 esp_err_t esp_mesh_comm_p2p_start(void) {
     static bool started = false;
@@ -218,6 +260,7 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
             mesh_event_connected_t *connected = (mesh_event_connected_t *)event_data;
             esp_mesh_get_id(&id);
             mesh_layer = connected->self_layer;
+            mesh_update_led_layer(mesh_layer);
             memcpy(&mesh_parent_addr.addr, connected->connected.bssid, 6);
             ESP_LOGI(MESH_TAG,
                      "<MESH_EVENT_PARENT_CONNECTED>layer:%d-->%d, parent:" MACSTR "%s, ID:" MACSTR ", duty:%d",
@@ -246,6 +289,7 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
         case MESH_EVENT_LAYER_CHANGE: {
             mesh_event_layer_change_t *layer_change = (mesh_event_layer_change_t *)event_data;
             mesh_layer = layer_change->new_layer;
+            mesh_update_led_layer(mesh_layer);
             ESP_LOGI(MESH_TAG, "<MESH_EVENT_LAYER_CHANGE>layer:%d-->%d%s",
                      last_layer, mesh_layer,
                      esp_mesh_is_root() ? "<ROOT>" : (mesh_layer == 2) ? "<layer2>"
@@ -353,8 +397,25 @@ void ip_event_handler(void *arg, esp_event_base_t event_base,
     }
 }
 
+void led_gpio_init(void) {
+    gpio_config_t io_conf = {
+        .intr_type = GPIO_INTR_DISABLE,
+        .mode = GPIO_MODE_OUTPUT,
+        .pin_bit_mask = (1ULL << LED_RED) | (1ULL << LED_GREEN) | (1ULL << LED_BLUE),
+        .pull_down_en = 0,
+        .pull_up_en = 0,
+    };
+    gpio_config(&io_conf);
+    gpio_set_level(LED_RED, 1);
+    gpio_set_level(LED_GREEN, 1);
+    gpio_set_level(LED_BLUE, 1);
+}
+
 void app_main(void) {
-    //mqtt_mesh_start();
+    ESP_LOGI(TAG, "Inicializando Mesh com configurações otimizadas...");
+    led_gpio_init();
+    
+    
     ESP_ERROR_CHECK(nvs_flash_init());
     /*  tcpip initialization */
     ESP_ERROR_CHECK(esp_netif_init());
@@ -400,10 +461,13 @@ void app_main(void) {
            strlen(CONFIG_MESH_ROUTER_PASSWD));
     /* mesh softAP */
     ESP_ERROR_CHECK(esp_mesh_set_ap_authmode(CONFIG_MESH_AP_AUTHMODE));
-    cfg.mesh_ap.max_connection = CONFIG_MESH_AP_CONNECTIONS;
+    cfg.mesh_ap.max_connection = 1;
     cfg.mesh_ap.nonmesh_max_connection = CONFIG_MESH_NON_MESH_AP_CONNECTIONS;
     memcpy((uint8_t *)&cfg.mesh_ap.password, CONFIG_MESH_AP_PASSWD,
            strlen(CONFIG_MESH_AP_PASSWD));
+
+    //esp_mesh_fix_root(true);   // mantém root fixo (opcional)
+
     ESP_ERROR_CHECK(esp_mesh_set_config(&cfg));
     /* mesh start */
     ESP_ERROR_CHECK(esp_mesh_start());
