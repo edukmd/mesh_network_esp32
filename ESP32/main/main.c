@@ -39,6 +39,8 @@
 
 static const char *TAG = "MAIN_CONFIG";
 
+#define MQTT_IP "mqtt://192.168.10.137"
+
 /*******************************************************
  *                Variable Definitions
  *******************************************************/
@@ -84,7 +86,7 @@ static esp_err_t mqtt_event_handler_cb(esp_mqtt_event_handle_t event) {
 
 static void mqtt_app_start(void) {
     esp_mqtt_client_config_t mqtt_cfg = {
-        .broker.address.uri = "mqtt://192.168.50.208",  // Ex: CONFIG_BROKER_URL
+        .broker.address.uri = MQTT_IP,  // Ex: CONFIG_BROKER_URL
         .network.reconnect_timeout_ms = 5000
     };
     mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
@@ -112,6 +114,7 @@ void report_node_info_task(void *arg) {
 
         uint8_t mac[6];
         esp_read_mac(mac, ESP_MAC_WIFI_STA);
+        mac[5]++;
         esp_mesh_get_parent_bssid(&parent);
 
         char mac_str[18], parent_str[18], child_mac[18];

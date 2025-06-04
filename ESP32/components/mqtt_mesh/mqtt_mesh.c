@@ -106,30 +106,49 @@ void mesh_disconnected_indicator(void) {
     ESP_LOGI("MESH", "DISCONNECTED from mesh");
 }
 
-void mesh_update_led_layer(int layer)
-{
-    switch (layer)
-    {
-    case 1:
-        gpio_set_level(LED_GREEN, 0);
-        gpio_set_level(LED_BLUE, 0);
-        gpio_set_level(LED_RED, 0);
-        break;
-    case 2:
-        gpio_set_level(LED_GREEN, 1);
-        gpio_set_level(LED_BLUE, 0);
-        gpio_set_level(LED_RED, 0);
-        break;
-    case 3:
-        gpio_set_level(LED_GREEN, 1);
-        gpio_set_level(LED_BLUE, 1);
-        gpio_set_level(LED_RED, 0);
-        break;
-    case 4:
-        gpio_set_level(LED_GREEN, 1);
-        gpio_set_level(LED_BLUE, 1);
-        gpio_set_level(LED_RED, 1);
-        break;
+
+void mesh_update_led_layer(int layer) {
+    switch (layer) {
+        case 1:
+            gpio_set_level(LED_GREEN, 0);
+            gpio_set_level(LED_BLUE, 0);
+            gpio_set_level(LED_RED, 0);
+            break;
+        case 2:
+            gpio_set_level(LED_GREEN, 1);
+            gpio_set_level(LED_BLUE, 0);
+            gpio_set_level(LED_RED, 0);
+            break;
+        case 3:
+            gpio_set_level(LED_GREEN, 0);
+            gpio_set_level(LED_BLUE, 1);
+            gpio_set_level(LED_RED, 0);
+            break;
+        case 4:
+            gpio_set_level(LED_GREEN, 1);
+            gpio_set_level(LED_BLUE, 1);
+            gpio_set_level(LED_RED, 0);
+            break;
+        case 5:
+            gpio_set_level(LED_GREEN, 0);
+            gpio_set_level(LED_BLUE, 0);
+            gpio_set_level(LED_RED, 1);
+            break;
+        case 6:
+            gpio_set_level(LED_GREEN, 1);
+            gpio_set_level(LED_BLUE, 0);
+            gpio_set_level(LED_RED, 1);
+            break;
+        case 7:
+            gpio_set_level(LED_GREEN, 0);
+            gpio_set_level(LED_BLUE, 1);
+            gpio_set_level(LED_RED, 1);
+            break;
+        case 8:
+            gpio_set_level(LED_GREEN, 1);
+            gpio_set_level(LED_BLUE, 1);
+            gpio_set_level(LED_RED, 1);
+            break;
     }
 }
 

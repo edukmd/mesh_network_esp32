@@ -1,6 +1,6 @@
 {
   "C_Cpp.intelliSenseEngine": "default",
-  "idf.espIdfPathWin": "C:\\Users\\eduar\\esp\\v5.4.1\\esp-idf",
+  "idf.espIdfPathWin": "C:\\Users\\Eduardo Kamada\\esp\\v5.4\\esp-idf",
   "idf.toolsPathWin": "C:\\.espressif",
   "idf.pythonInstallPath": "C:\\.espressif\\tools\\idf-python\\3.11.2\\python.exe",
   "files.encoding": "utf8",
@@ -18,6 +18,6 @@
     "gpio.h": "c",
     "gpio_types.h": "c"
   },
-  "idf.portWin": "COM5",
+  "idf.portWin": "COM7",
   "idf.flashType": "UART"
 }
