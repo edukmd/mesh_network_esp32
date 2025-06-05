@@ -19,6 +19,8 @@
 
 static esp_timer_handle_t periodic_timer;
 
+static int layerLastState = 0;
+
 /**
  * @brief Converts MAC address to human-readable string.
  */
@@ -108,6 +110,9 @@ void mesh_disconnected_indicator(void) {
 
 
 void mesh_update_led_layer(int layer) {
+
+    layerLastState = layer;
+
     switch (layer) {
         case 1:
             gpio_set_level(LED_GREEN, 0);
@@ -151,6 +156,33 @@ void mesh_update_led_layer(int layer) {
             break;
     }
 }
+
+/**
+ * @brief Pisca os LEDs RGB conectados nas GPIOs definidas como LED_RED, LED_GREEN e LED_BLUE.
+ *
+ * Essa função é usada para indicar visualmente ações nos nós da rede mesh.
+ * Cada LED pisca duas vezes com um intervalo de 200 ms.
+ */
+void blink_all_leds(void)
+{
+    const int delay_ms = 200;
+
+    for (int i = 0; i < 2; i++)
+    {
+        gpio_set_level(LED_RED, 0);
+        gpio_set_level(LED_GREEN, 0);
+        gpio_set_level(LED_BLUE, 0);
+        vTaskDelay(delay_ms / portTICK_PERIOD_MS);
+        gpio_set_level(LED_RED, 1);
+        gpio_set_level(LED_GREEN, 1);
+        gpio_set_level(LED_BLUE, 1);
+        vTaskDelay(delay_ms / portTICK_PERIOD_MS);
+        
+    }
+
+    mesh_update_led_layer(layerLastState);
+}
+
 
 
 /**

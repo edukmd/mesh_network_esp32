@@ -21,6 +21,7 @@ void mesh_connected_indicator(int layer);
 void mesh_disconnected_indicator(void);
 
 void mesh_update_led_layer(int layer);
+void blink_all_leds(void);
 
 /**
  * @brief Initializes and starts the periodic task that sends node info (MAC, hops) to its parent.
