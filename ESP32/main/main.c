@@ -111,8 +111,8 @@ static void mqtt_app_start(void)
         .broker.address.uri = MQTT_IP, // Ex: CONFIG_BROKER_URL
         .network.reconnect_timeout_ms = 5000};
     mqtt_client = esp_mqtt_client_init(&mqtt_cfg);
-    
-    (mqtt_client);
+    esp_mqtt_client_register_event(mqtt_client, ESP_EVENT_ANY_ID, mqtt_event_handler_cb, NULL);
+    esp_mqtt_client_start(mqtt_client);
 }
 
 static void report_node_info_task(void *arg);
@@ -150,11 +150,7 @@ void report_node_info_task(void *arg)
         mesh_update_led_layer(layer);
 
         esp_err_t rt_err = esp_mesh_get_routing_table((mesh_addr_t *)children, MAX_ROUTING_TABLE_SIZE * 6, &table_size);
-        ESP_LOGI(TAG, "routing_table status: %s", esp_err_to_name(rt_err));
         int child_count = table_size / sizeof(mesh_addr_t);
-
-        ESP_LOGI(TAG, "Routing table size: %d bytes, child count: %d", table_size, child_count);
-        ESP_LOGI(TAG, "[%s] layer %d, filhos diretos: %d", mac_str, layer, child_count);
 
         cJSON *json = cJSON_CreateObject();
         cJSON_AddStringToObject(json, "mac", mac_str);
@@ -168,8 +164,6 @@ void report_node_info_task(void *arg)
             {
                 children[i].addr[5]++;
                 get_mac_str(child_mac, children[i].addr);
-
-                ESP_LOGI(TAG, "  ↪ Adicionando ao JSON: %s", child_mac); // Debug
                 cJSON_AddItemToArray(children_array, cJSON_CreateString(child_mac));
             }
         }
