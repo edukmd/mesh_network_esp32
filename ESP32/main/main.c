@@ -31,7 +31,8 @@
  *******************************************************/
 #define RX_SIZE (1500)
 #define TX_SIZE (1460)
-static int report_interval_ms = 2000;
+
+
 
 #define MESH_CONNECTION_PER_HOP 2
 #define GPIO_OUTPUT_PIN_SEL ((1ULL << LED_RED) | (1ULL << LED_BLUE) | (1ULL << LED_GREEN))
@@ -39,8 +40,11 @@ static int report_interval_ms = 2000;
 #define MAX_ROUTING_TABLE_SIZE 20
 
 static const char *TAG = "MAIN_CONFIG";
+static int report_interval_ms = 2000;
+static int current_max_children = MESH_CONNECTION_PER_HOP;
 
-#define MQTT_IP "mqtt://192.168.10.127"
+//#define MQTT_IP "mqtt://192.168.10.127"
+#define MQTT_IP "mqtt://192.168.50.208"
 
 /*******************************************************
  *                Variable Definitions

@@ -22,6 +22,10 @@ last_seen = {}
 NODE_TIMEOUT = 10
 last_node_snapshot = set()
 running = True  # Flag para controlar encerramento seguro
+selected_node_mac = None
+highlight_timer_id = None
+root = None
+
 
 def get_local_ip():
     try:
@@ -35,7 +39,7 @@ def get_local_ip():
         return "127.0.0.1"
 
 MQTT_BROKER = get_local_ip()
-MQTT_PORT = 1884
+MQTT_PORT = 1883
 MQTT_TOPIC = "mesh/network/info"
 MQTT_CONFIG_COMMAND_TOPIC = "mesh/cmd"
 
@@ -170,7 +174,29 @@ def plot_graph(ax, canvas):
         for node, label in labels.items():
             nx.draw_networkx_labels(G, pos, labels={node: label}, font_color=font_colors.get(node, 'black'), font_size=6, ax=ax)
 
+    # Calcula limites com margem extra para evitar corte das bolinhas
+    x_vals = [p[0] for p in pos.values()]
+    y_vals = [p[1] for p in pos.values()]
+
+    if x_vals and y_vals:
+        x_min, x_max = min(x_vals), max(x_vals)
+        y_min, y_max = min(y_vals), max(y_vals)
+        margin_x = 1.0  # espaço horizontal extra
+        margin_y = 1.0  # espaço vertical extra
+
+        ax.set_xlim(x_min - margin_x, x_max + margin_x)
+        ax.set_ylim(y_min - margin_y, y_max + margin_y)
+
+    # Destacar nó selecionado com círculo extra
+    if selected_node_mac and selected_node_mac in pos:
+        x, y = pos[selected_node_mac]
+        ax.scatter(x, y, s=5000, facecolors='none', edgecolors='dodgerblue', linewidths=2, zorder=5)
+
     canvas.draw()
+
+    ax.axis("off")  # remove os eixos
+    plt.subplots_adjust(left=0.02, right=0.98, top=0.98, bottom=0.02)
+
 
 def enviar_config(entry_intervalo, entry_maxfilhos, entry_timeout):
     global NODE_TIMEOUT
@@ -207,6 +233,28 @@ def atualizar_lista_nos(listbox):
                 listbox.insert(tk.END, label)
             last_node_snapshot = current_snapshot
 
+
+def ao_marcar_no(event):
+    global selected_node_mac, highlight_timer_id
+    widget = event.widget
+    if not widget.curselection():
+        return
+    index = widget.curselection()[0]
+    texto = widget.get(index)
+    mac = texto.split()[0]
+    selected_node_mac = mac
+
+    # Agendar remoção do círculo após 3 segundos
+    if highlight_timer_id is not None:
+        root.after_cancel(highlight_timer_id)
+    highlight_timer_id = root.after(3000, limpar_destaque)  # 3000 ms = 3s
+
+def limpar_destaque():
+    global selected_node_mac, highlight_timer_id
+    selected_node_mac = None
+    highlight_timer_id = None
+
+
 def ao_selecionar_no(event):
     widget = event.widget
     if not widget.curselection():
@@ -214,14 +262,14 @@ def ao_selecionar_no(event):
     index = widget.curselection()[0]
     texto = widget.get(index)
     mac = texto.split()[0]
-
     msg = json.dumps({"target": mac, "action": "blink"})
     send_message(msg)
     print(f"📤 Comando de piscar LED enviado para {mac}")
 
+
 def main():
     after_id = None
-    global mqtt_client, running
+    global mqtt_client, running, root
     mosquitto_process = start_mosquitto()
 
     mqtt_client = mqtt.Client(protocol=mqtt.MQTTv311)
@@ -248,20 +296,22 @@ def main():
     ttk.Label(left_panel, text="🌐 Nós ativos:").pack(anchor=tk.W)
 
     listbox_nodes = tk.Listbox(left_panel, width=40)
-    listbox_nodes.bind("<Double-Button-1>", ao_selecionar_no)
+    listbox_nodes.bind("<<ListboxSelect>>", ao_marcar_no)  # Clique simples: só destaca
+    listbox_nodes.bind("<Double-Button-1>", ao_selecionar_no)  # Duplo clique: envia comando
+
     listbox_nodes.pack(fill=tk.BOTH, expand=True)
 
     right_panel = ttk.Frame(main_frame)
     right_panel.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(10, 7))
     canvas = FigureCanvasTkAgg(fig, master=right_panel)
     canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
     frame = ttk.Frame(root, padding=10)
     frame.pack(fill=tk.X)
 
-    ttk.Label(frame, text="Intervalo (ms):").pack(side=tk.LEFT)
+    ttk.Label(frame, text="Intervalo de envio (ms):").pack(side=tk.LEFT)
     entry_intervalo = ttk.Entry(frame, width=10)
     entry_intervalo.pack(side=tk.LEFT, padx=5)
     entry_intervalo.insert(0, "5000")
@@ -278,7 +328,7 @@ def main():
 
     ttk.Button(
         frame,
-        text="Enviar",
+        text="Configurar",
         command=lambda: enviar_config(entry_intervalo, entry_maxfilhos, entry_timeout)
     ).pack(side=tk.LEFT, padx=10)
 

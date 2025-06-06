@@ -16,7 +16,6 @@
 #define TAG "MQTT_MESH"
 #define MAX_CHILDREN 10
 
-
 static esp_timer_handle_t periodic_timer;
 
 static int layerLastState = 0;
@@ -59,7 +58,8 @@ static void periodic_send_callback(void *arg)
 
     // Adiciona filhos
     cJSON *children_array = cJSON_CreateArray();
-    for (int i = 0; i < child_count; i++) {
+    for (int i = 0; i < child_count; i++)
+    {
         mac_to_str(children[i].addr, child_mac);
         cJSON_AddItemToArray(children_array, cJSON_CreateString(child_mac));
     }
@@ -72,7 +72,8 @@ static void periodic_send_callback(void *arg)
 
     ESP_LOGI(TAG, "JSON enviado: %s", json_str);
 
-    if (esp_mesh_is_root()) {
+    if (esp_mesh_is_root())
+    {
         ESP_LOGI(TAG, "Root (self) info: %s", json_str);
         cJSON_free((void *)json_str);
         cJSON_Delete(json);
@@ -84,76 +85,76 @@ static void periodic_send_callback(void *arg)
         .data = buffer,
         .size = len + 1,
         .proto = MESH_PROTO_JSON,
-        .tos = MESH_TOS_P2P
-    };
+        .tos = MESH_TOS_P2P};
 
     esp_err_t err = esp_mesh_send(NULL, &data, 0, NULL, 0);
-    if (err != ESP_OK) {
+    if (err != ESP_OK)
+    {
         ESP_LOGE(TAG, "Failed to send data to parent: %s", esp_err_to_name(err));
     }
-
-    
 
     cJSON_free((void *)json_str);
     cJSON_Delete(json);
     free(buffer);
 }
 
-
-void mesh_connected_indicator(int layer) {
+void mesh_connected_indicator(int layer)
+{
     ESP_LOGI("MESH", "CONNECTED to mesh at layer %d", layer);
 }
 
-void mesh_disconnected_indicator(void) {
+void mesh_disconnected_indicator(void)
+{
     ESP_LOGI("MESH", "DISCONNECTED from mesh");
 }
 
-
-void mesh_update_led_layer(int layer) {
+void mesh_update_led_layer(int layer)
+{
 
     layerLastState = layer;
 
-    switch (layer) {
-        case 1:
-            gpio_set_level(LED_GREEN, 0);
-            gpio_set_level(LED_BLUE, 0);
-            gpio_set_level(LED_RED, 0);
-            break;
-        case 2:
-            gpio_set_level(LED_GREEN, 1);
-            gpio_set_level(LED_BLUE, 0);
-            gpio_set_level(LED_RED, 0);
-            break;
-        case 3:
-            gpio_set_level(LED_GREEN, 0);
-            gpio_set_level(LED_BLUE, 1);
-            gpio_set_level(LED_RED, 0);
-            break;
-        case 4:
-            gpio_set_level(LED_GREEN, 1);
-            gpio_set_level(LED_BLUE, 1);
-            gpio_set_level(LED_RED, 0);
-            break;
-        case 5:
-            gpio_set_level(LED_GREEN, 0);
-            gpio_set_level(LED_BLUE, 0);
-            gpio_set_level(LED_RED, 1);
-            break;
-        case 6:
-            gpio_set_level(LED_GREEN, 1);
-            gpio_set_level(LED_BLUE, 0);
-            gpio_set_level(LED_RED, 1);
-            break;
-        case 7:
-            gpio_set_level(LED_GREEN, 0);
-            gpio_set_level(LED_BLUE, 1);
-            gpio_set_level(LED_RED, 1);
-            break;
-        case 8:
-            gpio_set_level(LED_GREEN, 1);
-            gpio_set_level(LED_BLUE, 1);
-            gpio_set_level(LED_RED, 1);
-            break;
+    switch (layer)
+    {
+    case 1:
+        gpio_set_level(LED_GREEN, 0);
+        gpio_set_level(LED_BLUE, 0);
+        gpio_set_level(LED_RED, 0);
+        break;
+    case 2:
+        gpio_set_level(LED_GREEN, 1);
+        gpio_set_level(LED_BLUE, 0);
+        gpio_set_level(LED_RED, 0);
+        break;
+    case 3:
+        gpio_set_level(LED_GREEN, 0);
+        gpio_set_level(LED_BLUE, 1);
+        gpio_set_level(LED_RED, 0);
+        break;
+    case 4:
+        gpio_set_level(LED_GREEN, 1);
+        gpio_set_level(LED_BLUE, 1);
+        gpio_set_level(LED_RED, 0);
+        break;
+    case 5:
+        gpio_set_level(LED_GREEN, 0);
+        gpio_set_level(LED_BLUE, 0);
+        gpio_set_level(LED_RED, 1);
+        break;
+    case 6:
+        gpio_set_level(LED_GREEN, 1);
+        gpio_set_level(LED_BLUE, 0);
+        gpio_set_level(LED_RED, 1);
+        break;
+    case 7:
+        gpio_set_level(LED_GREEN, 0);
+        gpio_set_level(LED_BLUE, 1);
+        gpio_set_level(LED_RED, 1);
+        break;
+    case 8:
+        gpio_set_level(LED_GREEN, 1);
+        gpio_set_level(LED_BLUE, 1);
+        gpio_set_level(LED_RED, 1);
+        break;
     }
 }
 
@@ -177,13 +178,15 @@ void blink_all_leds(void)
         gpio_set_level(LED_GREEN, 1);
         gpio_set_level(LED_BLUE, 1);
         vTaskDelay(delay_ms / portTICK_PERIOD_MS);
-        
     }
+
+    gpio_set_level(LED_RED, 0);
+    gpio_set_level(LED_GREEN, 0);
+    gpio_set_level(LED_BLUE, 0);
+    vTaskDelay(500 / portTICK_PERIOD_MS);
 
     mesh_update_led_layer(layerLastState);
 }
-
-
 
 /**
  * @brief Initializes and starts the periodic reporting timer
@@ -194,8 +197,7 @@ void mqtt_mesh_start()
 
     const esp_timer_create_args_t timer_args = {
         .callback = &periodic_send_callback,
-        .name = "periodic_mesh_timer"
-    };
+        .name = "periodic_mesh_timer"};
     ESP_ERROR_CHECK(esp_timer_create(&timer_args, &periodic_timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(periodic_timer, 10 * 1000000)); // 10 seconds
 }
