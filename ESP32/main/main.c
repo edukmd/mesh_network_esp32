@@ -32,18 +32,16 @@
 #define RX_SIZE (1500)
 #define TX_SIZE (1460)
 
-
-
-#define MESH_CONNECTION_PER_HOP 2
+#define MESH_CONNECTION_PER_HOP 1
 #define GPIO_OUTPUT_PIN_SEL ((1ULL << LED_RED) | (1ULL << LED_BLUE) | (1ULL << LED_GREEN))
 
 #define MAX_ROUTING_TABLE_SIZE 20
 
 static const char *TAG = "MAIN_CONFIG";
-static int report_interval_ms = 2000;
+static int report_interval_ms = 10000;
 static int current_max_children = MESH_CONNECTION_PER_HOP;
 
-//#define MQTT_IP "mqtt://192.168.10.127"
+// #define MQTT_IP "mqtt://192.168.10.127"
 #define MQTT_IP "mqtt://192.168.50.208"
 
 /*******************************************************
@@ -63,6 +61,171 @@ static mesh_addr_t mesh_parent_addr;
 static int mesh_layer = -1;
 static esp_netif_t *netif_sta = NULL;
 static esp_mqtt_client_handle_t mqtt_client = NULL;
+
+// --- Funções utilitárias ---
+static bool is_command_for_me(const char *target_mac);
+static void forward_command_to_children(const char *data, size_t data_len);
+static void get_mac_str(char *out, uint8_t mac[6]);
+static const char *build_node_status_json(char *mac_str, char *parent_str, int hops, char children_output[][18], int child_count);
+
+// --- Comandos P2P ---
+static void handle_ping_response(void);
+static void process_p2p_command(cJSON *cmd, const char *payload);
+static void process_pong_response(cJSON *cmd, const char *payload);
+
+// --- MQTT ---
+static void mqtt_event_handler_cb(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data);
+static void mqtt_app_start(void);
+
+// --- Mesh ---
+void esp_mesh_p2p_rx_main(void *arg);
+esp_err_t esp_mesh_comm_p2p_start(void);
+void mesh_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data);
+void ip_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id, void *event_data);
+
+// --- LED e GPIO ---
+void led_gpio_init(void);
+void mesh_connected_indicator(int layer);
+void mesh_disconnected_indicator(void);
+void mesh_update_led_layer(int layer);
+
+// --- Tarefas ---
+static void report_node_info_task(void *arg);
+
+// --- Main ---
+void app_main(void);
+
+static bool is_command_for_me(const char *target_mac) {
+    char my_mac_str[18];
+    uint8_t my_mac[6];
+    esp_read_mac(my_mac, ESP_MAC_WIFI_STA);
+    my_mac[5]++;
+    sprintf(my_mac_str, "%02X:%02X:%02X:%02X:%02X:%02X",
+            my_mac[0], my_mac[1], my_mac[2],
+            my_mac[3], my_mac[4], my_mac[5]);
+
+    return strcmp(my_mac_str, target_mac) == 0;
+}
+
+static void forward_command_to_children(const char *data, size_t data_len) {
+    mesh_addr_t children[MAX_ROUTING_TABLE_SIZE];
+    int table_size = 0;
+
+    if (esp_mesh_get_routing_table(children, MAX_ROUTING_TABLE_SIZE * 6, &table_size) != ESP_OK) {
+        ESP_LOGW("MQTT CMD", "⚠️ Falha ao obter tabela de roteamento");
+        return;
+    }
+
+    mesh_data_t fwd_data = {
+        .proto = MESH_PROTO_BIN,
+        .tos = MESH_TOS_P2P,
+        .data = (uint8_t *)data,
+        .size = data_len};
+
+    for (int i = 0; i < table_size; ++i) {
+        if (i == 0) continue;
+        esp_err_t err = esp_mesh_send(&children[i], &fwd_data, MESH_DATA_P2P, NULL, 0);
+        if (err != ESP_OK) {
+            ESP_LOGW("MQTT CMD", "❌ Falha ao enviar para filho %d", i);
+        } else {
+            ESP_LOGI("MQTT CMD", "📤 Enviado para filho %d", i);
+        }
+    }
+}
+
+/**
+ * @brief Responde ao comando "ping" com uma mensagem "pong" que será encaminhada até o nó raiz.
+ */
+static void handle_ping_response(void) {
+    ESP_LOGI("PING_HANDLER", "🏓 Comando ping recebido. Preparando resposta...");
+
+    char my_mac_str[18];
+    uint8_t my_mac[6];
+    esp_read_mac(my_mac, ESP_MAC_WIFI_STA);
+    my_mac[5]++;
+    sprintf(my_mac_str, "%02X:%02X:%02X:%02X:%02X:%02X",
+            my_mac[0], my_mac[1], my_mac[2],
+            my_mac[3], my_mac[4], my_mac[5]);
+
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "type", "pong");
+    cJSON_AddStringToObject(resp, "mac", my_mac_str);
+
+    const char *json_str = cJSON_PrintUnformatted(resp);
+
+    if (esp_mesh_is_root() && mqtt_client) {
+        ESP_LOGI("PING_HANDLER", "📤 Enviando resposta PONG via MQTT (sou root)");
+        esp_mqtt_client_publish(mqtt_client, "mesh/network/info", json_str, 0, 1, 0);
+    } else {
+        mesh_data_t response = {
+            .proto = MESH_PROTO_BIN,
+            .tos = MESH_TOS_P2P,
+            .data = (uint8_t *)json_str,
+            .size = strlen(json_str) + 1};
+
+        esp_err_t err = esp_mesh_send(NULL, &response, 0, NULL, 0);
+        if (err != ESP_OK) {
+            ESP_LOGW("PING_HANDLER", "❌ Falha ao enviar resposta PONG: %s", esp_err_to_name(err));
+        } else {
+            ESP_LOGI("PING_HANDLER", "📤 Resposta PONG enviada para o pai");
+        }
+    }
+
+    cJSON_free((void *)json_str);
+    cJSON_Delete(resp);
+}
+
+static void process_p2p_command(cJSON *cmd, const char *payload) {
+    cJSON *target = cJSON_GetObjectItem(cmd, "target");
+    cJSON *action = cJSON_GetObjectItem(cmd, "action");
+
+    if (!target || !action || !cJSON_IsString(target) || !cJSON_IsString(action)) return;
+
+    if (is_command_for_me(target->valuestring)) {
+        if (strcmp(action->valuestring, "blink") == 0) {
+            ESP_LOGI("P2P_CMD", "✨ Comando blink recebido");
+            blink_all_leds();
+        } else if (strcmp(action->valuestring, "ping") == 0) {
+            ESP_LOGI("P2P_CMD", "🏓 Comando ping recebido");
+            handle_ping_response();
+        }
+    } else {
+        ESP_LOGI("P2P_CMD", "🔁 Comando não é para mim, repassando...");
+        // forward_command_to_children(payload, strlen(payload) + 1);
+    }
+}
+
+static void process_pong_response(cJSON *cmd, const char *payload) {
+    if (esp_mesh_is_root() && mqtt_client) {
+        ESP_LOGI("MESH", "📨 Resposta PONG recebida: %s", payload);
+        esp_mqtt_client_publish(mqtt_client, "mesh/network/info", payload, 0, 1, 0);
+    } else {
+        ESP_LOGI("MESH", "🔁 Encaminhando resposta PONG para o pai");
+        mesh_data_t forward = {
+            .proto = MESH_PROTO_BIN,
+            .tos = MESH_TOS_P2P,
+            .data = (uint8_t *)payload,
+            .size = strlen(payload) + 1};
+        esp_mesh_send(NULL, &forward, 0, NULL, 0);
+    }
+}
+
+static const char *build_node_status_json(char *mac_str, char *parent_str, int hops, char children_output[][18], int child_count) {
+    cJSON *json = cJSON_CreateObject();
+    cJSON_AddStringToObject(json, "mac", mac_str);
+    cJSON_AddStringToObject(json, "parent", esp_mesh_is_root() ? "null" : parent_str);
+    cJSON_AddNumberToObject(json, "hops", hops);
+
+    cJSON *children_array = cJSON_CreateArray();
+    for (int i = 0; i < child_count; ++i) {
+        cJSON_AddItemToArray(children_array, cJSON_CreateString(children_output[i]));
+    }
+    cJSON_AddItemToObject(json, "children", children_array);
+
+    const char *json_str = cJSON_PrintUnformatted(json);
+    cJSON_Delete(json);
+    return json_str;
+}
 
 /**
  * @brief Callback de eventos MQTT
@@ -92,59 +255,27 @@ static void mqtt_event_handler_cb(void *handler_args, esp_event_base_t base, int
                 break;
             }
 
-            // Comando de alteração de intervalo
             cJSON *interval = cJSON_GetObjectItem(cmd, "interval");
             if (interval && cJSON_IsNumber(interval)) {
                 report_interval_ms = interval->valueint;
                 ESP_LOGW("MQTT CMD", "🕒 Novo intervalo de envio: %d ms", report_interval_ms);
             }
 
-            // Comando específico para MAC
             cJSON *target = cJSON_GetObjectItem(cmd, "target");
             cJSON *action = cJSON_GetObjectItem(cmd, "action");
+
             if (target && action && cJSON_IsString(target) && cJSON_IsString(action)) {
-                // Verifica o MAC do próprio nó
-                uint8_t my_mac[6];
-                char my_mac_str[18];
-                esp_read_mac(my_mac, ESP_MAC_WIFI_STA);
-                my_mac[5]++;
-                sprintf(my_mac_str, "%02X:%02X:%02X:%02X:%02X:%02X",
-                        my_mac[0], my_mac[1], my_mac[2],
-                        my_mac[3], my_mac[4], my_mac[5]);
-
-                if (strcmp(target->valuestring, my_mac_str) == 0) {
+                if (is_command_for_me(target->valuestring)) {
                     if (strcmp(action->valuestring, "blink") == 0) {
-                        ESP_LOGI("MQTT CMD", "✨ Blink recebido para mim (%s)", my_mac_str);
+                        ESP_LOGI("MQTT CMD", "✨ Blink recebido para mim");
                         blink_all_leds();
+                    } else if (strcmp(action->valuestring, "ping") == 0) {
+                        ESP_LOGI("MQTT CMD", "🏓 Comando ping é para mim, respondendo diretamente");
+                        handle_ping_response();  // responderá via MQTT no nó raiz
                     }
-                } else if (esp_mesh_is_root()) {
+                } else {
                     ESP_LOGI("MQTT CMD", "🔁 Repassando comando para os filhos do nó raiz...");
-
-                    // Propaga o comando para os filhos diretos
-                    mesh_addr_t children[MAX_ROUTING_TABLE_SIZE];
-                    int table_size = 0;
-
-                    if (esp_mesh_get_routing_table((mesh_addr_t *)children, MAX_ROUTING_TABLE_SIZE * 6, &table_size) == ESP_OK) {
-                        int child_count = table_size;
-                        mesh_data_t fwd_data = {
-                            .proto = MESH_PROTO_BIN,
-                            .tos = MESH_TOS_P2P,
-                            .data = (uint8_t *)event->data,
-                            .size = event->data_len};
-
-                        for (int i = 0; i < child_count; ++i) {
-                            if (i != 0) {
-                                esp_err_t err = esp_mesh_send(&children[i], &fwd_data, MESH_DATA_P2P, NULL, 0);
-                                if (err != ESP_OK) {
-                                    ESP_LOGW("MQTT CMD", "❌ Falha ao enviar para filho %d", i);
-                                } else {
-                                    ESP_LOGI("MQTT CMD", "📤 Enviado para filho %d", i);
-                                }
-                            }
-                        }
-                    } else {
-                        ESP_LOGW("MQTT CMD", "⚠️ Falha ao obter tabela de roteamento");
-                    }
+                    forward_command_to_children(event->data, event->data_len);
                 }
             }
 
@@ -173,15 +304,15 @@ static void get_mac_str(char *out, uint8_t mac[6]) {
     sprintf(out, "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
-void report_node_info_task(void *arg) {
+static void report_node_info_task(void *arg) {
     mesh_data_t data;
     data.proto = MESH_PROTO_BIN;
     data.tos = MESH_TOS_P2P;
-    data.size = 0;
     data.data = tx_buf;
+
     mesh_addr_t parent;
     mesh_addr_t children[MAX_ROUTING_TABLE_SIZE];
-    int table_size = 0;
+    char mac_str[18], parent_str[18], children_mac[MAX_ROUTING_TABLE_SIZE][18];
 
     while (true) {
         vTaskDelay(report_interval_ms / portTICK_PERIOD_MS);
@@ -189,49 +320,40 @@ void report_node_info_task(void *arg) {
         uint8_t mac[6];
         esp_read_mac(mac, ESP_MAC_WIFI_STA);
         mac[5]++;
-        esp_mesh_get_parent_bssid(&parent);
-
-        char mac_str[18], parent_str[18], child_mac[18];
         get_mac_str(mac_str, mac);
+
+        esp_mesh_get_parent_bssid(&parent);
         get_mac_str(parent_str, parent.addr);
 
         int layer = esp_mesh_get_layer();
         mesh_update_led_layer(layer);
 
-        esp_err_t rt_err = esp_mesh_get_routing_table((mesh_addr_t *)children, MAX_ROUTING_TABLE_SIZE * 6, &table_size);
-        int child_count = table_size;
+        int table_size = 0;
+        esp_mesh_get_routing_table(children, MAX_ROUTING_TABLE_SIZE * 6, &table_size);
 
-        cJSON *json = cJSON_CreateObject();
-        cJSON_AddStringToObject(json, "mac", mac_str);
-        cJSON_AddStringToObject(json, "parent", esp_mesh_is_root() ? "null" : parent_str);
-        cJSON_AddNumberToObject(json, "hops", layer);
-
-        cJSON *children_array = cJSON_CreateArray();
-        for (int i = 0; i < child_count; i++) {
+        int child_count = 0;
+        for (int i = 0; i < table_size; i++) {
             if (i != 0) {
                 children[i].addr[5]++;
-                get_mac_str(child_mac, children[i].addr);
-                cJSON_AddItemToArray(children_array, cJSON_CreateString(child_mac));
+                get_mac_str(children_mac[child_count++], children[i].addr);
             }
         }
-        cJSON_AddItemToObject(json, "children", children_array);
 
-        const char *json_str = cJSON_PrintUnformatted(json);
+        const char *json_str = build_node_status_json(mac_str, parent_str, layer, children_mac, child_count);
         size_t len = strlen(json_str);
-        if (len >= TX_SIZE)
-            len = TX_SIZE - 1;
+        if (len >= TX_SIZE) len = TX_SIZE - 1;
+
         memcpy(tx_buf, json_str, len);
         tx_buf[len] = '\0';
         data.size = len + 1;
 
-        if (!esp_mesh_is_root()) {
-            esp_mesh_send(NULL, &data, 0, NULL, 0);
+        if (esp_mesh_is_root()) {
+            esp_mqtt_client_publish(mqtt_client, "mesh/network/info", (const char *)tx_buf, data.size - 1, 1, 0);
         } else {
-            esp_mqtt_client_publish(mqtt_client, "mesh/network/info", (const char *)data.data, data.size - 1, 1, 0);
+            esp_mesh_send(NULL, &data, 0, NULL, 0);
         }
 
         cJSON_free((void *)json_str);
-        cJSON_Delete(json);
     }
 }
 
@@ -255,82 +377,30 @@ void esp_mesh_p2p_rx_main(void *arg) {
         if (esp_mesh_recv(&from, &data, portMAX_DELAY, &flag, NULL, 0) == ESP_OK && data.size > 0) {
             char *payload = (char *)data.data;
 
-            if (esp_mesh_is_root() && mqtt_client) {
-                cJSON *json = cJSON_Parse(payload);
-                if (!json) {
-                    ESP_LOGW("NODE_JSON", "⚠️ JSON inválido recebido: %s", payload);
-                } else {
-                    if (!cJSON_GetObjectItem(json, "target"))  // só publica se não for comando
-                    {
-                        esp_mqtt_client_publish(mqtt_client, "mesh/network/info", payload, 0, 1, 0);
-                        continue;
-                    } else {
-                        ESP_LOGI("NODE_JSON", "🎯 Comando com 'target' recebido, não publicado no MQTT.");
-                    }
-                    cJSON_Delete(json);
-                }
-            }
-
-            // Todos os nós verificam se a mensagem é um comando (ex: "blink")
             cJSON *cmd = cJSON_Parse(payload);
-            if (cmd) {
-                cJSON *target = cJSON_GetObjectItem(cmd, "target");
-                cJSON *action = cJSON_GetObjectItem(cmd, "action");
-                if (target && action && cJSON_IsString(target) && cJSON_IsString(action)) {
-                    char my_mac_str[18];
-                    uint8_t my_mac[6];
-                    esp_read_mac(my_mac, ESP_MAC_WIFI_STA);
-                    my_mac[5]++;
-                    sprintf(my_mac_str, "%02X:%02X:%02X:%02X:%02X:%02X",
-                            my_mac[0], my_mac[1], my_mac[2],
-                            my_mac[3], my_mac[4], my_mac[5]);
-
-                    if (strcmp(my_mac_str, target->valuestring) == 0) {
-                        if (strcmp(action->valuestring, "blink") == 0) {
-                            ESP_LOGI("P2P_CMD", "✨ Comando blink recebido para mim (%s)", my_mac_str);
-                            blink_all_leds();
-                        }
-                    } else {
-                        ESP_LOGI("P2P_CMD", "🔁 Comando não é para mim (%s), repassando para filhos...", my_mac_str);
-
-                        // Encaminha para filhos se existirem
-                        mesh_addr_t children[MAX_ROUTING_TABLE_SIZE];
-                        int table_size = 0;
-                        if (esp_mesh_get_routing_table((mesh_addr_t *)children, MAX_ROUTING_TABLE_SIZE * 6, &table_size) == ESP_OK) {
-                            int child_count = table_size;
-                            mesh_data_t fwd_data = {
-                                .proto = MESH_PROTO_BIN,
-                                .tos = MESH_TOS_P2P,
-                                .data = (uint8_t *)payload,
-                                .size = strlen(payload) + 1};
-
-                            ESP_LOGI("P2P_CMD", "🔍 Total de filhos: %d", child_count);
-
-                            for (int i = 0; i < child_count; ++i) {
-                                char mac_str[18];
-                                uint8_t mac_copy[6];
-                                memcpy(mac_copy, children[i].addr, 6);
-
-                                sprintf(mac_str, "%02X:%02X:%02X:%02X:%02X:%02X",
-                                        mac_copy[0], mac_copy[1], mac_copy[2],
-                                        mac_copy[3], mac_copy[4], mac_copy[5]);
-
-                                ESP_LOGI("P2P_CMD", "👶 Filho %d: MAC=%s", i, mac_str);
-
-                                if (i != 0) {
-                                    esp_err_t err = esp_mesh_send(&children[i], &fwd_data, MESH_DATA_P2P, NULL, 0);
-                                    if (err != ESP_OK) {
-                                        ESP_LOGW("P2P_CMD", "❌ Falha ao encaminhar para filho %d", i);
-                                    } else {
-                                        ESP_LOGI("P2P_CMD", "📤 Encaminhado para filho %d", i);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                cJSON_Delete(cmd);
+            if (!cmd) {
+                ESP_LOGW("MESH_RX", "⚠️ JSON inválido recebido: %s", payload);
+                continue;
             }
+
+            cJSON *type = cJSON_GetObjectItem(cmd, "type");
+            if (type && cJSON_IsString(type) && strcmp(type->valuestring, "pong") == 0) {
+                process_pong_response(cmd, payload);
+                cJSON_Delete(cmd);
+                continue;
+            }
+
+            if (esp_mesh_is_root() && mqtt_client) {
+                if (!cJSON_GetObjectItem(cmd, "target")) {
+                    esp_mqtt_client_publish(mqtt_client, "mesh/network/info", payload, 0, 1, 0);
+                    cJSON_Delete(cmd);
+                    continue;
+                }
+                ESP_LOGI("NODE_JSON", "🎯 Comando com 'target' recebido, não publicado no MQTT.");
+            }
+
+            process_p2p_command(cmd, payload);
+            cJSON_Delete(cmd);
         }
     }
 }
@@ -616,6 +686,7 @@ void app_main(void) {
 
     ESP_ERROR_CHECK(esp_mesh_set_config(&cfg));
     /* mesh start */
+    vTaskDelay((esp_random() % 5000) / portTICK_PERIOD_MS);
     ESP_ERROR_CHECK(esp_mesh_start());
 #ifdef CONFIG_MESH_ENABLE_PS
     /* set the device active duty cycle. (default:10, MESH_PS_DEVICE_DUTY_REQUEST) */

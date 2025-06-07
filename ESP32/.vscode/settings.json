@@ -1,8 +1,8 @@
 {
   "C_Cpp.intelliSenseEngine": "default",
-  "idf.espIdfPathWin": "C:\\Users\\eduar\\esp\\v5.4.1\\esp-idf",
-  "idf.toolsPathWin": "C:\\.espressif",
-  "idf.pythonInstallPath": "C:\\.espressif\\tools\\idf-python\\3.11.2\\python.exe",
+  "idf.espIdfPathWin": "C:/Espressif/frameworks/esp-idf-v5.4.1/",
+  "idf.toolsPathWin": "C:\\Espressif",
+  "idf.pythonInstallPath": "C:\\Espressif\\tools\\idf-python\\3.11.2\\python.exe",
   "files.encoding": "utf8",
   "files.associations": {
     "mqtt_client.h": "c",
@@ -18,6 +18,6 @@
     "gpio.h": "c",
     "gpio_types.h": "c"
   },
-  "idf.portWin": "COM7",
+  "idf.portWin": "COM10",
   "idf.flashType": "UART"
 }

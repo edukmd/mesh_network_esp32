@@ -23,8 +23,13 @@ NODE_TIMEOUT = 10
 last_node_snapshot = set()
 running = True  # Flag para controlar encerramento seguro
 selected_node_mac = None
+selected_node_mac_draw = False
 highlight_timer_id = None
 root = None
+ping_timers = {}
+ping_latencies = {}  # mac -> tempo decorrido do ping (float)
+
+
 
 
 def get_local_ip():
@@ -38,7 +43,8 @@ def get_local_ip():
         print(f"❌ Erro ao obter IP local: {e}")
         return "127.0.0.1"
 
-MQTT_BROKER = get_local_ip()
+#MQTT_BROKER = get_local_ip()
+MQTT_BROKER = "192.168.50.208"
 MQTT_PORT = 1883
 MQTT_TOPIC = "mesh/network/info"
 MQTT_CONFIG_COMMAND_TOPIC = "mesh/cmd"
@@ -71,6 +77,20 @@ def on_message(client, userdata, msg):
         payload = msg.payload.decode()
         print(f"📥 Mensagem recebida: {payload}")
         data = json.loads(payload)
+        # Se for resposta pong
+        if data.get("type") == "pong" and "mac" in data:
+            pong_mac = data["mac"]
+            if pong_mac in ping_timers:
+                elapsed = (time.time() - ping_timers[pong_mac]) * 1000
+                ping_latencies[pong_mac] = elapsed  # salva para exibir
+                print(f"🏓 Ping para {pong_mac} respondido em {elapsed:.0f} ms")
+                del ping_timers[pong_mac]
+            else:
+                print(f"🏓 Pong recebido de {pong_mac}, mas não foi feito ping.")
+            return
+
+
+
 
         if all(k in data for k in ('mac', 'parent', 'hops', 'children')):
             mac = data['mac']
@@ -157,11 +177,18 @@ def plot_graph(ax, canvas):
             else:
                 node_colors.append(cmap(norm(G.nodes[n].get("hops", 0))))
 
-        labels = {
-            node: "ROUTER" if G.nodes[node].get("is_router", False)
-            else f"{node}\nHops:{G.nodes[node].get('hops', '?')}"
-            for node in G.nodes()
-        }
+        labels = {}
+        for node in G.nodes():
+            if G.nodes[node].get("is_router", False):
+                labels[node] = "ROUTER"
+            else:
+                hops = G.nodes[node].get("hops", "?")
+                label = f"{node}\nHops:{hops}"
+                if node in ping_latencies:
+                    latency = ping_latencies[node]
+                    label += f"\nPing:{latency:.0f}ms"
+                labels[node] = label
+
 
         font_colors = {
             node: 'white' if G.nodes[node].get("is_router", False)
@@ -188,7 +215,7 @@ def plot_graph(ax, canvas):
         ax.set_ylim(y_min - margin_y, y_max + margin_y)
 
     # Destacar nó selecionado com círculo extra
-    if selected_node_mac and selected_node_mac in pos:
+    if selected_node_mac and selected_node_mac_draw and selected_node_mac in pos:
         x, y = pos[selected_node_mac]
         ax.scatter(x, y, s=5000, facecolors='none', edgecolors='dodgerblue', linewidths=2, zorder=5)
 
@@ -209,6 +236,16 @@ def enviar_config(entry_intervalo, entry_maxfilhos, entry_timeout):
         print(f"📤 Config enviado: {msg} | 🕒 Timeout atualizado para {NODE_TIMEOUT}s")
     except ValueError:
         print("❌ Valores inválidos.")
+
+def enviar_ping():
+    global selected_node_mac
+    if selected_node_mac:
+        print("ping no {}".format(selected_node_mac))
+        ping_timers[selected_node_mac] = time.time()  # Marca tempo de envio
+        msg = json.dumps({"target": selected_node_mac, "action": "ping"})
+        send_message(msg)
+        print(f"📤 Comando de ping enviado para {selected_node_mac}")
+
 
 def atualizar_lista_nos(listbox):
     global last_node_snapshot
@@ -235,7 +272,7 @@ def atualizar_lista_nos(listbox):
 
 
 def ao_marcar_no(event):
-    global selected_node_mac, highlight_timer_id
+    global selected_node_mac, highlight_timer_id, selected_node_mac_draw
     widget = event.widget
     if not widget.curselection():
         return
@@ -243,6 +280,7 @@ def ao_marcar_no(event):
     texto = widget.get(index)
     mac = texto.split()[0]
     selected_node_mac = mac
+    selected_node_mac_draw = True
 
     # Agendar remoção do círculo após 3 segundos
     if highlight_timer_id is not None:
@@ -250,8 +288,8 @@ def ao_marcar_no(event):
     highlight_timer_id = root.after(3000, limpar_destaque)  # 3000 ms = 3s
 
 def limpar_destaque():
-    global selected_node_mac, highlight_timer_id
-    selected_node_mac = None
+    global selected_node_mac, highlight_timer_id, selected_node_mac_draw
+    selected_node_mac_draw = False
     highlight_timer_id = None
 
 
@@ -331,6 +369,12 @@ def main():
         text="Configurar",
         command=lambda: enviar_config(entry_intervalo, entry_maxfilhos, entry_timeout)
     ).pack(side=tk.LEFT, padx=10)
+
+    ttk.Button(
+        frame,
+        text="Ping",
+        command=lambda: enviar_ping()
+    ).pack(side=tk.RIGHT, padx=10)
 
     def atualizar_interface():
         plot_graph(ax, canvas)
