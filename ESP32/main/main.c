@@ -39,7 +39,11 @@
 
 static const char *TAG = "MAIN_CONFIG";
 static int report_interval_ms = 10000;
+static unsigned int blockTask = 0;
 static int current_max_children = MESH_CONNECTION_PER_HOP;
+static bool mesh_active = false;
+volatile bool pending_mesh_restart = false;
+static bool mesh_was_stopped = false;
 
 // #define MQTT_IP "mqtt://192.168.10.127"
 #define MQTT_IP "mqtt://192.168.50.208"
@@ -257,25 +261,52 @@ static void mqtt_event_handler_cb(void *handler_args, esp_event_base_t base, int
 
             cJSON *interval = cJSON_GetObjectItem(cmd, "interval");
             if (interval && cJSON_IsNumber(interval)) {
-                report_interval_ms = interval->valueint;
-                ESP_LOGW("MQTT CMD", "🕒 Novo intervalo de envio: %d ms", report_interval_ms);
-            }
+                cJSON *max_children = cJSON_GetObjectItem(cmd, "max_children");
 
-            cJSON *target = cJSON_GetObjectItem(cmd, "target");
-            cJSON *action = cJSON_GetObjectItem(cmd, "action");
-
-            if (target && action && cJSON_IsString(target) && cJSON_IsString(action)) {
-                if (is_command_for_me(target->valuestring)) {
-                    if (strcmp(action->valuestring, "blink") == 0) {
-                        ESP_LOGI("MQTT CMD", "✨ Blink recebido para mim");
-                        blink_all_leds();
-                    } else if (strcmp(action->valuestring, "ping") == 0) {
-                        ESP_LOGI("MQTT CMD", "🏓 Comando ping é para mim, respondendo diretamente");
-                        handle_ping_response();  // responderá via MQTT no nó raiz
-                    }
+                // Atualiza intervalo
+                if (interval->valueint != 0) {
+                    blockTask = 0;
+                    report_interval_ms = interval->valueint;
+                    ESP_LOGW("MQTT CMD", "🕒 Novo intervalo de envio: %d ms", report_interval_ms);
                 } else {
-                    ESP_LOGI("MQTT CMD", "🔁 Repassando comando para os filhos do nó raiz...");
-                    forward_command_to_children(event->data, event->data_len);
+                    blockTask = 1;
+                    ESP_LOGW("MQTT CMD", "🛑 Task de envio bloqueada por intervalo 0");
+                }
+
+                forward_command_to_children(event->data, event->data_len);
+
+                // Atualiza max_children e reconfigura mesh
+                if (max_children && cJSON_IsNumber(max_children)) {
+                    int new_max = max_children->valueint;
+
+                    if (new_max <= 0 || new_max > MAX_ROUTING_TABLE_SIZE) {
+                        ESP_LOGW("MQTT CMD", "⚠️ Valor inválido para max_children: %d", new_max);
+                    } else if (new_max != current_max_children) {
+                        current_max_children = new_max;
+                        ESP_LOGW("MQTT CMD", "🆕 max_children alterado para %d, reconfiguração agendada...", current_max_children);
+                        pending_mesh_restart = true;
+                        mesh_was_stopped = false;
+                    } else {
+                        ESP_LOGI("MQTT CMD", "ℹ️ max_children já está em %d, sem necessidade de reconfigurar", current_max_children);
+                    }
+                }
+            } else {
+                cJSON *target = cJSON_GetObjectItem(cmd, "target");
+                cJSON *action = cJSON_GetObjectItem(cmd, "action");
+
+                if (target && action && cJSON_IsString(target) && cJSON_IsString(action)) {
+                    if (is_command_for_me(target->valuestring)) {
+                        if (strcmp(action->valuestring, "blink") == 0) {
+                            ESP_LOGI("MQTT CMD", "✨ Blink recebido para mim");
+                            blink_all_leds();
+                        } else if (strcmp(action->valuestring, "ping") == 0) {
+                            ESP_LOGI("MQTT CMD", "🏓 Comando ping é para mim, respondendo diretamente");
+                            handle_ping_response();  // responderá via MQTT no nó raiz
+                        }
+                    } else {
+                        ESP_LOGI("MQTT CMD", "🔁 Repassando comando para os filhos do nó raiz...");
+                        forward_command_to_children(event->data, event->data_len);
+                    }
                 }
             }
 
@@ -298,10 +329,47 @@ static void mqtt_app_start(void) {
     esp_mqtt_client_start(mqtt_client);
 }
 
-static void report_node_info_task(void *arg);
-
 static void get_mac_str(char *out, uint8_t mac[6]) {
     sprintf(out, "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+}
+
+static void check_and_reconfigure_mesh(void) {
+    if (pending_mesh_restart) {
+        if (mesh_active && !mesh_was_stopped) {
+            ESP_LOGI("MESH_RECONFIG", "🛑 Parando mesh para reconfiguração...");
+            ESP_ERROR_CHECK(esp_mesh_stop());
+            mesh_was_stopped = true;
+
+        } else if (!mesh_active && mesh_was_stopped) {
+            ESP_LOGI("MESH_RECONFIG", "🚀 Reiniciando mesh...");
+
+            esp_err_t err = esp_mesh_start();
+            if (err == ESP_OK) {
+                mesh_cfg_t mesh_cfg;
+                if (esp_mesh_get_config(&mesh_cfg) == ESP_OK) {
+                    mesh_cfg.mesh_ap.max_connection = current_max_children;
+                    esp_err_t cfg_err = esp_mesh_set_config(&mesh_cfg);
+                    if (cfg_err != ESP_OK) {
+                        ESP_LOGW("MESH_RECONFIG", "⚠️ Falha ao atualizar config: %s", esp_err_to_name(cfg_err));
+                    }
+                }
+
+                ESP_LOGI("MESH_RECONFIG", "✅ Mesh reconfigurada com sucesso");
+
+                mesh_was_stopped = false;
+                pending_mesh_restart = false;
+            } else {
+                ESP_LOGE("MESH_RECONFIG", "❌ Falha ao iniciar mesh: %s", esp_err_to_name(err));
+            }
+        }
+    }
+}
+
+void mesh_reconfig_task(void *arg) {
+    while (true) {
+        check_and_reconfigure_mesh();
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
 }
 
 static void report_node_info_task(void *arg) {
@@ -316,6 +384,10 @@ static void report_node_info_task(void *arg) {
 
     while (true) {
         vTaskDelay(report_interval_ms / portTICK_PERIOD_MS);
+
+        if (blockTask || !mesh_active) {
+            continue;
+        }
 
         uint8_t mac[6];
         esp_read_mac(mac, ESP_MAC_WIFI_STA);
@@ -390,10 +462,43 @@ void esp_mesh_p2p_rx_main(void *arg) {
                 continue;
             }
 
+            cJSON *interval = cJSON_GetObjectItem(cmd, "interval");
+            if (interval && cJSON_IsNumber(interval)) {
+                cJSON *max_children = cJSON_GetObjectItem(cmd, "max_children");
+
+                // Atualiza intervalo
+                if (interval->valueint != 0) {
+                    blockTask = 0;
+                    report_interval_ms = interval->valueint;
+                    ESP_LOGW("MQTT CMD", "🕒 Novo intervalo de envio: %d ms", report_interval_ms);
+                } else {
+                    blockTask = 1;
+                    ESP_LOGW("MQTT CMD", "🛑 Task de envio bloqueada por intervalo 0");
+                }
+
+                if (max_children && cJSON_IsNumber(max_children)) {
+                    int new_max = max_children->valueint;
+
+                    if (new_max <= 0 || new_max > MAX_ROUTING_TABLE_SIZE) {
+                        ESP_LOGW("MQTT CMD", "⚠️ Valor inválido para max_children: %d", new_max);
+                    } else if (new_max != current_max_children) {
+                        current_max_children = new_max;
+                        ESP_LOGW("MQTT CMD", "🆕 max_children alterado para %d, reconfiguração agendada...", current_max_children);
+                        pending_mesh_restart = true;
+                        mesh_was_stopped = false;
+                    } else {
+                        ESP_LOGI("MQTT CMD", "ℹ️ max_children já está em %d, sem necessidade de reconfigurar", current_max_children);
+                    }
+                }
+
+                continue;
+            }
+
             if (esp_mesh_is_root() && mqtt_client) {
                 if (!cJSON_GetObjectItem(cmd, "target")) {
                     esp_mqtt_client_publish(mqtt_client, "mesh/network/info", payload, 0, 1, 0);
                     cJSON_Delete(cmd);
+                    vTaskDelay(10 / portTICK_PERIOD_MS);
                     continue;
                 }
                 ESP_LOGI("NODE_JSON", "🎯 Comando com 'target' recebido, não publicado no MQTT.");
@@ -411,6 +516,7 @@ esp_err_t esp_mesh_comm_p2p_start(void) {
         started = true;
         xTaskCreate(report_node_info_task, "report_info", 4096, NULL, 5, NULL);
         xTaskCreate(esp_mesh_p2p_rx_main, "rx_task", 4096, NULL, 5, NULL);
+        xTaskCreate(mesh_reconfig_task, "mesh_reconfig", 4096, NULL, 7, NULL);
     }
     return ESP_OK;
 }
@@ -422,17 +528,24 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
     };
     static uint16_t last_layer = 0;
 
+    if (pending_mesh_restart && event_id != MESH_EVENT_STOPPED && event_id != MESH_EVENT_STARTED) {
+        return;
+    }
+
     switch (event_id) {
         case MESH_EVENT_STARTED: {
+            mesh_active = true;
             esp_mesh_get_id(&id);
             ESP_LOGI(MESH_TAG, "<MESH_EVENT_MESH_STARTED>ID:" MACSTR "", MAC2STR(id.addr));
             is_mesh_connected = false;
             mesh_layer = esp_mesh_get_layer();
         } break;
         case MESH_EVENT_STOPPED: {
+            mesh_active = false;
             ESP_LOGI(MESH_TAG, "<MESH_EVENT_STOPPED>");
             is_mesh_connected = false;
             mesh_layer = esp_mesh_get_layer();
+
         } break;
         case MESH_EVENT_CHILD_CONNECTED: {
             mesh_event_child_connected_t *child_connected = (mesh_event_child_connected_t *)event_data;
@@ -677,7 +790,7 @@ void app_main(void) {
            strlen(CONFIG_MESH_ROUTER_PASSWD));
     /* mesh softAP */
     ESP_ERROR_CHECK(esp_mesh_set_ap_authmode(CONFIG_MESH_AP_AUTHMODE));
-    cfg.mesh_ap.max_connection = MESH_CONNECTION_PER_HOP;
+    cfg.mesh_ap.max_connection = current_max_children;
     cfg.mesh_ap.nonmesh_max_connection = CONFIG_MESH_NON_MESH_AP_CONNECTIONS;
     memcpy((uint8_t *)&cfg.mesh_ap.password, CONFIG_MESH_AP_PASSWD,
            strlen(CONFIG_MESH_AP_PASSWD));

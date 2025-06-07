@@ -75,7 +75,6 @@ def on_connect(client, userdata, flags, rc):
 def on_message(client, userdata, msg):
     try:
         payload = msg.payload.decode()
-        print(f"📥 Mensagem recebida: {payload}")
         data = json.loads(payload)
         # Se for resposta pong
         if data.get("type") == "pong" and "mac" in data:
@@ -116,6 +115,8 @@ def on_message(client, userdata, msg):
         print(f"❌ Erro ao processar mensagem: {e}")
 
 def cleanup_inactive_nodes():
+    if NODE_TIMEOUT == 0:
+        return  # 👈 timeout infinito, não remove nada
     now = time.time()
     with lock:
         for node, last in list(last_seen.items()):
@@ -123,6 +124,7 @@ def cleanup_inactive_nodes():
                 print(f"🗑️ Removendo nó inativo/incompleto: {node}")
                 G.remove_node(node)
                 del last_seen[node]
+
 
 def get_text_color(rgb):
     r, g, b = [x * 255 for x in rgb[:3]]
@@ -249,6 +251,9 @@ def enviar_ping():
 
 def atualizar_lista_nos(listbox):
     global last_node_snapshot
+    if NODE_TIMEOUT == 0:
+        return  # 👈 não atualiza a lista se o timeout é infinito
+
     with lock:
         current_snapshot = set()
         display_lines = []
@@ -384,7 +389,7 @@ def main():
         nonlocal after_id
         if running:
             atualizar_interface()
-            after_id = root.after(1000, agendar_atualizacao)
+            after_id = root.after(100, agendar_atualizacao)
 
     def on_close():
         global running

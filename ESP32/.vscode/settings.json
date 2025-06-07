@@ -18,6 +18,6 @@
     "gpio.h": "c",
     "gpio_types.h": "c"
   },
-  "idf.portWin": "COM10",
+  "idf.portWin": "COM7",
   "idf.flashType": "UART"
 }
