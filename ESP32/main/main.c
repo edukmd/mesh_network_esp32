@@ -44,6 +44,7 @@ static int current_max_children = MESH_CONNECTION_PER_HOP;
 static bool mesh_active = false;
 volatile bool pending_mesh_restart = false;
 static bool mesh_was_stopped = false;
+static bool wifi_already_initialized = false;
 
 // #define MQTT_IP "mqtt://192.168.10.127"
 #define MQTT_IP "mqtt://192.168.50.208"
@@ -95,6 +96,7 @@ void mesh_update_led_layer(int layer);
 
 // --- Tarefas ---
 static void report_node_info_task(void *arg);
+static void mesh_full_init_and_start(void);
 
 // --- Main ---
 void app_main(void);
@@ -337,30 +339,16 @@ static void check_and_reconfigure_mesh(void) {
     if (pending_mesh_restart) {
         if (mesh_active && !mesh_was_stopped) {
             ESP_LOGI("MESH_RECONFIG", "🛑 Parando mesh para reconfiguração...");
+            mesh_update_led_layer(8);
             ESP_ERROR_CHECK(esp_mesh_stop());
             mesh_was_stopped = true;
 
         } else if (!mesh_active && mesh_was_stopped) {
-            ESP_LOGI("MESH_RECONFIG", "🚀 Reiniciando mesh...");
-
-            esp_err_t err = esp_mesh_start();
-            if (err == ESP_OK) {
-                mesh_cfg_t mesh_cfg;
-                if (esp_mesh_get_config(&mesh_cfg) == ESP_OK) {
-                    mesh_cfg.mesh_ap.max_connection = current_max_children;
-                    esp_err_t cfg_err = esp_mesh_set_config(&mesh_cfg);
-                    if (cfg_err != ESP_OK) {
-                        ESP_LOGW("MESH_RECONFIG", "⚠️ Falha ao atualizar config: %s", esp_err_to_name(cfg_err));
-                    }
-                }
-
-                ESP_LOGI("MESH_RECONFIG", "✅ Mesh reconfigurada com sucesso");
-
-                mesh_was_stopped = false;
-                pending_mesh_restart = false;
-            } else {
-                ESP_LOGE("MESH_RECONFIG", "❌ Falha ao iniciar mesh: %s", esp_err_to_name(err));
-            }
+            ESP_LOGI("MESH_RECONFIG", "🚀 Reiniciando mesh com nova configuração...");
+            ESP_ERROR_CHECK(esp_mesh_deinit());
+            mesh_full_init_and_start();
+            mesh_was_stopped = false;
+            pending_mesh_restart = false;
         }
     }
 }
@@ -527,10 +515,6 @@ void mesh_event_handler(void *arg, esp_event_base_t event_base,
         0,
     };
     static uint16_t last_layer = 0;
-
-    if (pending_mesh_restart && event_id != MESH_EVENT_STOPPED && event_id != MESH_EVENT_STARTED) {
-        return;
-    }
 
     switch (event_id) {
         case MESH_EVENT_STARTED: {
@@ -741,73 +725,63 @@ void led_gpio_init(void) {
     gpio_set_level(LED_BLUE, 1);
 }
 
+static void mesh_full_init_and_start(void) {
+    ESP_LOGI("MESH_RECONFIG", "🔁 Inicializando Mesh (reconfiguração)...");
+
+    if (!wifi_already_initialized) {
+        wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
+        ESP_ERROR_CHECK(esp_wifi_init(&config));
+        ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &ip_event_handler, NULL));
+        ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_FLASH));
+        ESP_ERROR_CHECK(esp_wifi_start());
+        wifi_already_initialized = true;
+    }
+
+    ESP_ERROR_CHECK(esp_mesh_init());
+    ESP_ERROR_CHECK(esp_event_handler_register(MESH_EVENT, ESP_EVENT_ANY_ID, &mesh_event_handler, NULL));
+    ESP_ERROR_CHECK(esp_mesh_set_topology(CONFIG_MESH_TOPOLOGY));
+    ESP_ERROR_CHECK(esp_mesh_set_max_layer(CONFIG_MESH_MAX_LAYER));
+    ESP_ERROR_CHECK(esp_mesh_set_vote_percentage(1));
+    ESP_ERROR_CHECK(esp_mesh_set_xon_qsize(128));
+    ESP_ERROR_CHECK(esp_mesh_disable_ps());
+    ESP_ERROR_CHECK(esp_mesh_set_ap_assoc_expire(20));
+
+    mesh_cfg_t cfg = MESH_INIT_CONFIG_DEFAULT();
+    memcpy((uint8_t *)&cfg.mesh_id, MESH_ID, 6);
+    cfg.channel = CONFIG_MESH_CHANNEL;
+    cfg.router.ssid_len = strlen(CONFIG_MESH_ROUTER_SSID);
+    memcpy((uint8_t *)&cfg.router.ssid, CONFIG_MESH_ROUTER_SSID, cfg.router.ssid_len);
+    memcpy((uint8_t *)&cfg.router.password, CONFIG_MESH_ROUTER_PASSWD, strlen(CONFIG_MESH_ROUTER_PASSWD));
+
+    cfg.mesh_ap.max_connection = current_max_children;
+    cfg.mesh_ap.nonmesh_max_connection = CONFIG_MESH_NON_MESH_AP_CONNECTIONS;
+    memcpy((uint8_t *)&cfg.mesh_ap.password, CONFIG_MESH_AP_PASSWD, strlen(CONFIG_MESH_AP_PASSWD));
+
+    ESP_ERROR_CHECK(esp_mesh_set_ap_authmode(CONFIG_MESH_AP_AUTHMODE));
+    ESP_ERROR_CHECK(esp_mesh_set_config(&cfg));
+
+    vTaskDelay((esp_random() % 5000) / portTICK_PERIOD_MS);
+    ESP_ERROR_CHECK(esp_mesh_start());
+
+    ESP_LOGI("MESH_RECONFIG", "✅ Mesh reconfigurada com sucesso");
+}
+
 void app_main(void) {
     ESP_LOGI(TAG, "Inicializando Mesh com configurações otimizadas...");
     led_gpio_init();
 
     ESP_ERROR_CHECK(nvs_flash_init());
-    /*  tcpip initialization */
     ESP_ERROR_CHECK(esp_netif_init());
-    /*  event initialization */
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    /*  create network interfaces for mesh (only station instance saved for further manipulation, soft AP instance ignored */
     ESP_ERROR_CHECK(esp_netif_create_default_wifi_mesh_netifs(&netif_sta, NULL));
-    /*  wifi initialization */
-    wifi_init_config_t config = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&config));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &ip_event_handler, NULL));
-    ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_FLASH));
-    ESP_ERROR_CHECK(esp_wifi_start());
-    /*  mesh initialization */
-    ESP_ERROR_CHECK(esp_mesh_init());
-    ESP_ERROR_CHECK(esp_event_handler_register(MESH_EVENT, ESP_EVENT_ANY_ID, &mesh_event_handler, NULL));
-    /*  set mesh topology */
-    ESP_ERROR_CHECK(esp_mesh_set_topology(CONFIG_MESH_TOPOLOGY));
-    /*  set mesh max layer according to the topology */
-    ESP_ERROR_CHECK(esp_mesh_set_max_layer(CONFIG_MESH_MAX_LAYER));
-    ESP_ERROR_CHECK(esp_mesh_set_vote_percentage(1));
-    ESP_ERROR_CHECK(esp_mesh_set_xon_qsize(128));
-#ifdef CONFIG_MESH_ENABLE_PS
-    /* Enable mesh PS function */
-    ESP_ERROR_CHECK(esp_mesh_enable_ps());
-    /* better to increase the associate expired time, if a small duty cycle is set. */
-    ESP_ERROR_CHECK(esp_mesh_set_ap_assoc_expire(10));
-    /* better to increase the announce interval to avoid too much management traffic, if a small duty cycle is set. */
-    ESP_ERROR_CHECK(esp_mesh_set_announce_interval(600, 3300));
-#else
-    /* Disable mesh PS function */
-    ESP_ERROR_CHECK(esp_mesh_disable_ps());
-    ESP_ERROR_CHECK(esp_mesh_set_ap_assoc_expire(10));
-#endif
-    mesh_cfg_t cfg = MESH_INIT_CONFIG_DEFAULT();
-    /* mesh ID */
-    memcpy((uint8_t *)&cfg.mesh_id, MESH_ID, 6);
-    /* router */
-    cfg.channel = CONFIG_MESH_CHANNEL;
-    cfg.router.ssid_len = strlen(CONFIG_MESH_ROUTER_SSID);
-    memcpy((uint8_t *)&cfg.router.ssid, CONFIG_MESH_ROUTER_SSID, cfg.router.ssid_len);
-    memcpy((uint8_t *)&cfg.router.password, CONFIG_MESH_ROUTER_PASSWD,
-           strlen(CONFIG_MESH_ROUTER_PASSWD));
-    /* mesh softAP */
-    ESP_ERROR_CHECK(esp_mesh_set_ap_authmode(CONFIG_MESH_AP_AUTHMODE));
-    cfg.mesh_ap.max_connection = current_max_children;
-    cfg.mesh_ap.nonmesh_max_connection = CONFIG_MESH_NON_MESH_AP_CONNECTIONS;
-    memcpy((uint8_t *)&cfg.mesh_ap.password, CONFIG_MESH_AP_PASSWD,
-           strlen(CONFIG_MESH_AP_PASSWD));
 
-    // esp_mesh_fix_root(true);   // mantém root fixo (opcional)
+    mesh_full_init_and_start();  // Chamada centralizada
 
-    ESP_ERROR_CHECK(esp_mesh_set_config(&cfg));
-    /* mesh start */
-    vTaskDelay((esp_random() % 5000) / portTICK_PERIOD_MS);
-    ESP_ERROR_CHECK(esp_mesh_start());
-#ifdef CONFIG_MESH_ENABLE_PS
-    /* set the device active duty cycle. (default:10, MESH_PS_DEVICE_DUTY_REQUEST) */
-    ESP_ERROR_CHECK(esp_mesh_set_active_duty_cycle(CONFIG_MESH_PS_DEV_DUTY, CONFIG_MESH_PS_DEV_DUTY_TYPE));
-    /* set the network active duty cycle. (default:10, -1, MESH_PS_NETWORK_DUTY_APPLIED_ENTIRE) */
-    ESP_ERROR_CHECK(esp_mesh_set_network_duty_cycle(CONFIG_MESH_PS_NWK_DUTY, CONFIG_MESH_PS_NWK_DUTY_DURATION, CONFIG_MESH_PS_NWK_DUTY_RULE));
-#endif
-    ESP_LOGI(MESH_TAG, "mesh starts successfully, heap:%" PRId32 ", %s<%d>%s, ps:%d", esp_get_minimum_free_heap_size(),
-             esp_mesh_is_root_fixed() ? "root fixed" : "root not fixed",
-             esp_mesh_get_topology(), esp_mesh_get_topology() ? "(chain)" : "(tree)", esp_mesh_is_ps_enabled());
+    // Inicializa as tasks Mesh P2P e monitoramento
+    ESP_ERROR_CHECK(esp_mesh_comm_p2p_start());
+
+    ESP_LOGI(MESH_TAG, "Mesh inicializada, heap:%" PRId32 ", topo:%s, ps:%d",
+             esp_get_minimum_free_heap_size(),
+             esp_mesh_get_topology() ? "chain" : "tree",
+             esp_mesh_is_ps_enabled());
 }

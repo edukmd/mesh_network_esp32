@@ -362,7 +362,7 @@ def main():
     ttk.Label(frame, text="Máx. filhos:").pack(side=tk.LEFT)
     entry_maxfilhos = ttk.Entry(frame, width=5)
     entry_maxfilhos.pack(side=tk.LEFT, padx=5)
-    entry_maxfilhos.insert(0, "2")
+    entry_maxfilhos.insert(0, "1")
 
     ttk.Label(frame, text="Node Timeout (s):").pack(side=tk.LEFT)
     entry_timeout = ttk.Entry(frame, width=5)
