@@ -42,8 +42,8 @@ def get_local_ip():
         print(f"❌ Erro ao obter IP local: {e}")
         return "127.0.0.1"
 
-#MQTT_BROKER = get_local_ip()
-MQTT_BROKER = "192.168.50.208"
+MQTT_BROKER = get_local_ip()
+#MQTT_BROKER = "192.168.50.208"
 MQTT_PORT = 1883
 MQTT_TOPIC = "mesh/network/info"
 MQTT_CONFIG_COMMAND_TOPIC = "mesh/cmd"
