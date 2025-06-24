@@ -2,7 +2,6 @@ import json
 import threading
 import networkx as nx
 import matplotlib.pyplot as plt
-import matplotlib.cm as cm
 import matplotlib.colors as colors
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import paho.mqtt.client as mqtt
@@ -19,7 +18,7 @@ G.add_node("ROUTER", is_router=True)
 lock = threading.Lock()
 mqtt_client = None
 last_seen = {}
-NODE_TIMEOUT = 10
+NODE_TIMEOUT = 20
 last_node_snapshot = set()
 running = True  # Flag para controlar encerramento seguro
 selected_node_mac = None

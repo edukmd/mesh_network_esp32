@@ -16,8 +16,12 @@
     "mqtt_mesh.h": "c",
     "nvs_flash.h": "c",
     "gpio.h": "c",
-    "gpio_types.h": "c"
+    "gpio_types.h": "c",
+    "esp_log.h": "c",
+    "esp_wifi.h": "c",
+    "esp_event.h": "c",
+    "esp_mac.h": "c"
   },
-  "idf.portWin": "COM7",
+  "idf.portWin": "COM10",
   "idf.flashType": "UART"
 }

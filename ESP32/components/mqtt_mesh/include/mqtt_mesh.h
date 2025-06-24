@@ -11,7 +11,6 @@
 #define MQTT_MESH_H
 
 #include "esp_err.h"
-#include "esp_mesh.h"
 
 #define LED_RED    23
 #define LED_BLUE    22
@@ -22,22 +21,5 @@ void mesh_disconnected_indicator(void);
 
 void mesh_update_led_layer(int layer);
 void blink_all_leds(void);
-
-/**
- * @brief Initializes and starts the periodic task that sends node info (MAC, hops) to its parent.
- * 
- * Must be called after the mesh is initialized and a parent is available.
- */
-void mqtt_mesh_start(void);
-
-/**
- * @brief Callback function to be called when data is received in the mesh network.
- * 
- * @param from Pointer to the mesh address of the sender.
- * @param data Pointer to the data structure received.
- * 
- * Should be registered only at the root node.
- */
-void mesh_received_cb(mesh_addr_t *from, mesh_data_t *data);
 
 #endif // MQTT_MESH_H
