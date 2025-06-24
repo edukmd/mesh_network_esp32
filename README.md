@@ -88,7 +88,6 @@ Firmware de código aberto para ESP32, utilizando rede Wi-Fi Mesh. O nó raiz da
 5. Compile o firmware usando o botão **Build** da extensão.
 6. Grave o firmware usando o botão **Flash**.
 
-
 ---
 
 ### Alternativa: Uso com ESP-IDF (linha de comando)
@@ -122,3 +121,12 @@ Caso esteja utilizando apenas o framework ESP-IDF via terminal, siga os passos a
 
 ---
 
+### 📄 Licença
+
+Este projeto, **mesh_network_esp32**, é licenciado sob os termos da [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0), permitindo uso, modificação e distribuição, inclusive para fins comerciais, com proteção contra reivindicações de patente.
+
+```
+Copyright 2025 Eduardo Kamada and Fernando Simplicio de Sousa
+```
+
+Para mais detalhes, consulte o arquivo [`LICENSE`](./LICENSE) na raiz do repositório.
